@@ -101,7 +101,7 @@ func locatePeer() (*net.TCPAddr, error) {
 		log.Fatalln("Failed to initialize resolver:", err.Error())
 	}
 
-	entries := make(chan *zeroconf.ServiceEntry, 10)
+	entries := make(chan *zeroconf.ServiceEntry)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
 	defer cancel()
 
@@ -110,16 +110,18 @@ func locatePeer() (*net.TCPAddr, error) {
 		log.Fatalln("Failed to browse:", err.Error())
 	}
 
-	<-ctx.Done()
-
-	for entry := range entries {
-		return &net.TCPAddr{
-			IP:   entry.AddrIPv4[0],
-			Port: entry.Port,
-		}, nil
+	timeout := time.NewTicker(5 * time.Second)
+	for {
+		select {
+		case entry := <-entries:
+			return &net.TCPAddr{
+				IP:   entry.AddrIPv4[0],
+				Port: entry.Port,
+			}, nil
+		case <-timeout.C:
+			return nil, errors.New("No receiver found")
+		}
 	}
-
-	return nil, errors.New("No receiver found")
 }
 
 func receive(destFolder string) {
