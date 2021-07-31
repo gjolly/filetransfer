@@ -8,3 +8,6 @@ build-windows:
 
 build-macos:
 	GOOS=darwin go build -o filetransfer.macos ./...
+
+clean:
+	rm filetransfer.exe filetransfer.linux filetransfer.macos
