@@ -3,7 +3,7 @@ package := "./cmd/filetransfer"
 all: build-linux build-windows build-macos
 
 build-linux:
-	go build -o filetransfer.linux ${package}
+	GOOS=linux go build -o filetransfer.linux ${package}
 
 build-windows:
 	GOOS=windows go build ${package}
