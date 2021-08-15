@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -10,10 +11,12 @@ import (
 	"net"
 	"os"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/gjolly/filetransfer/pkg/encryption"
 	"github.com/grandcat/zeroconf"
+	bip39 "github.com/tyler-smith/go-bip39"
 )
 
 const maxNameSize = 100
@@ -23,6 +26,8 @@ const mDNSRecord = "_filetransfer._tcp"
 const listenPort = 12345
 
 func main() {
+	log.SetFlags(0)
+
 	mode := os.Args[1]
 	arg := os.Args[2]
 
@@ -49,13 +54,13 @@ func send(filePath string) {
 		log.Fatalf("%v is a folder, sending folders is not supported yet", filePath)
 	}
 
-	log.Println("looking for peer on LAN, please start the program on the receiver side")
+	log.Println("Looking for peer on LAN, please start the program on the receiver side")
 
 	serverAddr, err := locatePeer()
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("receiver found at %v\n", serverAddr)
+	log.Printf("Receiver found at %v\n", serverAddr)
 
 	conn, err := tls.Dial("tcp", serverAddr.String(), &tls.Config{
 		InsecureSkipVerify: true,
@@ -63,6 +68,9 @@ func send(filePath string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	conn.Handshake()
+
+	printPhrase(conn)
 
 	_, fileName := path.Split(filePath)
 	header := make([]byte, maxNameSize)
@@ -123,7 +131,7 @@ func locatePeer() (*net.TCPAddr, error) {
 				Port: entry.Port,
 			}, nil
 		case <-timeout.C:
-			return nil, errors.New("No receiver found")
+			return nil, errors.New("no receiver found")
 		}
 	}
 }
@@ -132,7 +140,7 @@ func locatePeer() (*net.TCPAddr, error) {
 func receive(destFolder string) {
 	stat, err := os.Stat(destFolder)
 	if err != nil && os.IsNotExist(err) {
-		log.Fatal("the specified destination folder doesn't exit")
+		log.Fatal("The specified destination folder doesn't exit")
 	} else if err != nil {
 		log.Fatal(err)
 	} else if !stat.IsDir() {
@@ -144,12 +152,12 @@ func receive(destFolder string) {
 
 	pemCert, pemKey, err := encryption.GenerateCertificate()
 	if err != nil {
-		log.Fatalf("fail to generate TLS certificate: %v", err)
+		log.Fatalf("Fail to generate TLS certificate: %v", err)
 	}
 
 	cert, err := tls.X509KeyPair(pemCert, pemKey)
 	if err != nil {
-		log.Fatalf("fail to generate TLS certificate: %v", err)
+		log.Fatalf("Fail to generate TLS certificate: %v", err)
 	}
 
 	l, err := tls.Listen("tcp", fmt.Sprintf(":%v", listenPort), &tls.Config{
@@ -161,11 +169,14 @@ func receive(destFolder string) {
 		log.Fatalln(err)
 	}
 
-	log.Println("waiting for sender")
+	log.Println("Waiting for sender")
 	conn, err := l.Accept()
 	if err != nil {
 		log.Fatal(err)
 	}
+	tlsConn := conn.(*tls.Conn)
+	tlsConn.Handshake()
+	printPhrase(tlsConn)
 
 	header := make([]byte, maxNameSize)
 	n, err := conn.Read(header)
@@ -173,7 +184,7 @@ func receive(destFolder string) {
 		log.Fatal(err)
 	}
 	if n < maxNameSize {
-		log.Fatalf("wrong header received %s", header)
+		log.Fatalf("Wrong header received %s", header)
 	}
 
 	var fileName string
@@ -190,7 +201,7 @@ func receive(destFolder string) {
 		log.Fatalf("Failed to create dest file: %v (%v chars)", err, len(filePath))
 	}
 
-	log.Printf("receiving %v...\n", fileName)
+	log.Printf("Receiving %v...\n", fileName)
 	io.Copy(file, conn)
 
 	stop <- struct{}{}
@@ -198,5 +209,28 @@ func receive(destFolder string) {
 	conn.Close()
 	l.Close()
 
-	log.Printf("file received at %v\n", filePath)
+	log.Printf("File received at %v\n", filePath)
+}
+
+func printPhrase(conn *tls.Conn) {
+	connState := conn.ConnectionState()
+	exported, err := connState.ExportKeyingMaterial("filetransfer", nil, 16)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	mnemomic, err := bip39.NewMnemonic(exported)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("This is the secret for this exchange, make sure both side show the same sequence of words:")
+	log.Println(mnemomic)
+
+	log.Print("Continue [Y/n]? ")
+	input := bufio.NewScanner(os.Stdin)
+	input.Scan()
+	text := strings.ToLower(input.Text())
+	if len(text) != 0 && string(text[0]) != "y" {
+		log.Fatal("wrong secret, filetransfer rejected")
+	}
 }
