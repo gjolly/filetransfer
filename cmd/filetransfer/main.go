@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/gjolly/filetransfer/pkg/encryption"
 	"github.com/grandcat/zeroconf"
 )
 
@@ -55,7 +57,9 @@ func send(filePath string) {
 	}
 	log.Printf("receiver found at %v\n", serverAddr)
 
-	conn, err := net.Dial("tcp", serverAddr.String())
+	conn, err := tls.Dial("tcp", serverAddr.String(), &tls.Config{
+		InsecureSkipVerify: true,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -124,6 +128,7 @@ func locatePeer() (*net.TCPAddr, error) {
 	}
 }
 
+// receive is the server
 func receive(destFolder string) {
 	stat, err := os.Stat(destFolder)
 	if err != nil && os.IsNotExist(err) {
@@ -137,7 +142,21 @@ func receive(destFolder string) {
 	stop := make(chan struct{})
 	go startAdvert(stop)
 
-	l, err := net.Listen("tcp", fmt.Sprintf(":%v", listenPort))
+	pemCert, pemKey, err := encryption.GenerateCertificate()
+	if err != nil {
+		log.Fatalf("fail to generate TLS certificate: %v", err)
+	}
+
+	cert, err := tls.X509KeyPair(pemCert, pemKey)
+	if err != nil {
+		log.Fatalf("fail to generate TLS certificate: %v", err)
+	}
+
+	l, err := tls.Listen("tcp", fmt.Sprintf(":%v", listenPort), &tls.Config{
+		Certificates: []tls.Certificate{
+			cert,
+		},
+	})
 	if err != nil {
 		log.Fatalln(err)
 	}
